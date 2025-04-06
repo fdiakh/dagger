@@ -1,12 +1,12 @@
-use std::sync::Arc;
-
 use crate::core::config::Config;
 use crate::core::engine::Engine as DaggerEngine;
 use crate::core::graphql_client::DefaultGraphQLClient;
+use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 use crate::errors::ConnectError;
 use crate::gen::Query;
-use crate::logging::StdLogger;
 use crate::querybuilder::query;
 
 pub type DaggerConn = Query;
@@ -16,9 +16,7 @@ where
     F: FnOnce(DaggerConn) -> Fut + 'static,
     Fut: futures::Future<Output = eyre::Result<()>> + 'static,
 {
-    let cfg = Config::builder()
-        .logger(Arc::new(StdLogger::default()))
-        .build();
+    let cfg = Config::builder().build();
 
     connect_opts(cfg, dagger).await
 }
@@ -41,15 +39,26 @@ where
         graphql_client: Arc::new(DefaultGraphQLClient::new(&conn, &cfg)),
     };
 
-    dagger(client).await.map_err(ConnectError::DaggerContext)?;
+    // XXX: we have to use catch_unwind here because the dagger client functions can panic
+    // in particular this happens when the engine is shutdown during some queries.
+    // These functions should probably be made faillible instead of panicking ?
+    let res = AssertUnwindSafe(dagger(client))
+        .catch_unwind()
+        .await
+        .map_err(|_| ConnectError::FailedToConnect(eyre::eyre!("Panic in dagger client")))
+        .map(|res| res.map_err(ConnectError::DaggerContext));
 
     if let Some(proc) = &proc {
-        proc.shutdown()
+        let shutdown_res = proc
+            .shutdown()
             .await
-            .map_err(ConnectError::FailedToShutdown)?;
+            .map_err(ConnectError::FailedToShutdown);
+        if res.is_ok() {
+            shutdown_res?;
+        }
     }
 
-    Ok(())
+    res?
 }
 
 // Conn will automatically close on drop of proc

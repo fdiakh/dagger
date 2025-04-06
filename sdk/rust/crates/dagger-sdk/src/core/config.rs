@@ -26,6 +26,11 @@ pub struct Config {
     /// Spawn a terminal on container exec failure
     #[builder(default = "false")]
     pub interactive: bool,
+    /// Show the Dagger TUI (requires stderr to be a TTY).
+    /// When false (the default), stderr is piped and either forwarded to the
+    /// logger or discarded, matching the behavior of other Dagger SDKs.
+    #[builder(default = "false")]
+    pub tui: bool,
 }
 
 impl ConfigBuilder {
@@ -51,6 +56,7 @@ impl Config {
             execute_timeout_ms,
             logger,
             interactive,
+            tui: false,
         }
     }
 

@@ -53,7 +53,6 @@ impl DaggerSessionProc {
             tracing::warn!("failed to send shutdown signal: {}", e);
         }
 
-        tracing::trace!("closing stdin");
         proc.wait().await.context("failed to shutdown session")?;
 
         tracing::trace!("dagger subprocess shutdown");
@@ -109,16 +108,21 @@ impl InnerCliSession {
             format!("dagger.io/sdk.version:{}", env!("CARGO_PKG_VERSION")),
         ]);
 
-        let proc = tokio::process::Command::new(
+        let mut proc = tokio::process::Command::new(
             cli_path
                 .to_str()
                 .ok_or(eyre::anyhow!("could not get string from path"))?,
-        )
-        .args(args.as_slice())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        );
+
+        proc.args(args.as_slice())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+
+        if !config.tui {
+            proc.stderr(Stdio::piped());
+        }
+
+        let proc = proc.spawn()?;
 
         //TODO: Add retry mechanism
 
@@ -130,20 +134,21 @@ impl InnerCliSession {
         mut proc: tokio::process::Child,
         config: &Config,
     ) -> eyre::Result<(ConnectParams, DaggerSessionProc)> {
+        let logger = config.logger.as_ref().map(|p| p.clone());
+
         let stdout = proc
             .stdout
             .take()
             .ok_or(eyre::anyhow!("could not acquire stdout from child process"))?;
 
-        let stderr = proc
-            .stderr
-            .take()
-            .ok_or(eyre::anyhow!("could not acquire stderr from child process"))?;
-
+        let stderr = if !config.tui {
+            proc.stderr.take()
+        } else {
+            None
+        };
         let session: DaggerSessionProc = proc.into();
 
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let logger = config.logger.as_ref().map(|p| p.clone());
         let mut rx = session.subscribe_shutdown();
 
         tokio::spawn(async move {
@@ -156,14 +161,14 @@ impl InnerCliSession {
                                 sender.send(conn).await.unwrap();
                                 continue;
                             }
-
                             if let Some(logger) = &logger {
                                 logger.stdout(&line).unwrap();
+                            } else {
+                                println!("{line}");
                             }
                         }
                     },
                     _ = rx.recv() => {
-                        drop(stdout_bufr);
                         tracing::trace!("shutting down stdout");
                         break;
                     },
@@ -175,27 +180,29 @@ impl InnerCliSession {
 
         let mut rx = session.subscribe_shutdown();
         let logger = config.logger.as_ref().map(|p| p.clone());
-        tokio::spawn(async move {
-            let mut stderr_bufr = tokio::io::BufReader::new(stderr).lines();
-            loop {
-                tokio::select! {
-                    line = stderr_bufr.next_line() => {
-                        if let Ok(Some(line)) = line {
-                            if let Some(logger) = &logger {
-                                logger.stderr(&line).unwrap();
+        if let Some(stderr) = stderr {
+            tokio::spawn(async move {
+                let mut stderr_bufr = tokio::io::BufReader::new(stderr).lines();
+                loop {
+                    tokio::select! {
+                        line = stderr_bufr.next_line() => {
+                            if let Ok(Some(line)) = line {
+                                if let Some(logger) = &logger {
+                                    logger.stderr(&line).unwrap();
+                                }
                             }
-                        }
-                    },
-                    _ = rx.recv() => {
-                        drop(stderr_bufr);
-                        tracing::trace!("shutting down stderr");
-                        break;
-                    },
-                };
-            }
+                        },
+                        _ = rx.recv() => {
+                            drop(stderr_bufr);
+                            tracing::trace!("shutting down stderr");
+                            break;
+                        },
+                    };
+                }
 
-            tracing::trace!("closing stderr for dagger session");
-        });
+                tracing::trace!("closing stderr for dagger session");
+            });
+        }
 
         let conn = receiver.recv().await.ok_or(eyre::anyhow!(
             "could not receive ok signal from dagger-engine"
