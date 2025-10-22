@@ -23,6 +23,9 @@ pub struct Config {
     #[builder(default = "None")]
     /// Logger implementation to handle logs from the engine.
     pub logger: Option<DynLogger>,
+    /// Spawn a terminal on container exec failure
+    #[builder(default = "false")]
+    pub interactive: bool,
 }
 
 impl ConfigBuilder {
@@ -39,6 +42,7 @@ impl Config {
         timeout_ms: Option<u64>,
         execute_timeout_ms: Option<u64>,
         logger: Option<DynLogger>,
+        interactive: bool,
     ) -> Self {
         Self {
             workdir_path,
@@ -46,6 +50,7 @@ impl Config {
             timeout_ms: timeout_ms.unwrap_or(10 * 1000),
             execute_timeout_ms,
             logger,
+            interactive,
         }
     }
 

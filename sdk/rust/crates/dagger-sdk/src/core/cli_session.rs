@@ -90,6 +90,10 @@ impl InnerCliSession {
 
     fn start(&self, config: &Config, cli_path: &Path) -> eyre::Result<tokio::process::Child> {
         let mut args: Vec<String> = vec!["session".into()];
+
+        if config.interactive {
+            args.push("--interactive".into())
+        }
         if let Some(workspace) = &config.workdir_path {
             let abs_path = canonicalize(workspace)?;
             args.extend(["--workdir".into(), abs_path.to_string_lossy().to_string()])

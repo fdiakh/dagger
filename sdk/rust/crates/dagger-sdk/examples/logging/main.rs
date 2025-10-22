@@ -14,6 +14,7 @@ async fn main() -> eyre::Result<()> {
             timeout_ms: 1000,
             execute_timeout_ms: None,
             logger: Some(Arc::new(TracingLogger::default())),
+            interactive: false,
         },
         |client| async move {
             let host_source_dir = client.host().directory_opts(
